@@ -4,7 +4,6 @@ import java.io.BufferedWriter;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -13,48 +12,49 @@ import java.util.List;
 import org.apache.commons.math3.random.MersenneTwister;
 
 import collections.Counter;
-import io.TextReader;
 import stochasticProcesses.DP;
+import utilities.Segment;
 
-public class Segmenter {
+public class Segmenter<A> {
 
-	private DP<String> segments;
+	private DP<Segment<A>> segments;
 	private List<int[]> boundaries;
-	private Counter<String> atoms;
+	private Counter<A> atoms;
 	private MersenneTwister randomGenerator;
-	private Counter<String> samples;
+	private Counter<Segment<A>> samples;
 
-	public static String delimiter = " ";
+	public String delimiter = " ";
 
-	public Segmenter(double concentration) {
-		segments = new DP<String>(concentration);
+	public Segmenter(double concentration, String delimiter) {
+		segments = new DP<Segment<A>>(concentration);
 		// use linked list for frequent insertions
 		boundaries = new LinkedList<int[]>();
-		atoms = new Counter<String>();
+		atoms = new Counter<A>();
 		randomGenerator = new MersenneTwister();
-		samples = new Counter<String>();
+		samples = new Counter<Segment<A>>();
+		this.delimiter = delimiter;
 	}
 
-	public void segment(String pathToFile, int iter) throws FileNotFoundException, IOException {
+	public Segmenter(double concentration) {
+		this(concentration, " ");
+	}
+
+	public void segment(List<A[]> corpus, int iter) throws FileNotFoundException, IOException {
 		/**
 		 * Segment an input file.
 		 * 
 		 * @param pathToFile
 		 *            The path to the input file
 		 */
-		List<String[]> corpus = new ArrayList<String[]>();
-
-		try (TextReader reader = new TextReader(pathToFile)) {
-			String[] line;
-			while ((line = reader.nextLine()) != null) {
-				corpus.add(line);
-			}
-		}
 
 		initialiseState(corpus);
 		// TODO change number of samples later
-		train(corpus, iter, 0);
+		train(corpus, iter);
 		writeSegmentation(corpus, "out.txt");
+	}
+
+	public void setDelimiter(String delimiter) {
+		this.delimiter = delimiter;
 	}
 
 	/**
@@ -63,35 +63,64 @@ public class Segmenter {
 	 * @param corpus
 	 *            The corpus from which to initialise the state
 	 */
-	public void initialiseState(List<String[]> corpus) {
-		HashSet<String> unique = new HashSet<String>();
-		segments.setSizeOfSupport(0);
-		
-		for (String[] sent : corpus) {
-			segments.addObservation(String.join(delimiter, sent));
+	public void initialiseState(List<A[]> corpus) {
+		HashSet<A> unique = new HashSet<A>();
+		segments.setSizeOfBaseSupport(0);
+
+		for (A[] sent : corpus) {
+			segments.addObservation(new Segment<A>(sent));
 			boundaries.add(new int[] { sent.length });
 			atoms.putAll(sent, 1.0);
-			for (String word : sent) {
-				unique.add(word);
+			for (A atom : sent) {
+				unique.add(atom);
 			}
 		}
-		
-		segments.setSizeOfSupport(unique.size());
+
+		segments.setSizeOfBaseSupport(unique.size());
 	}
 
-	public void train(List<String[]> corpus, int iter, int samples) {
+	/**
+	 * Train the model without taking samples
+	 * 
+	 * @param corpus
+	 *            The corpus to segment
+	 * @param iter
+	 *            The number of iterations for the Gibbs Sampler
+	 */
+	public void train(List<A[]> corpus, int iter) {
 		for (int i = 1; i <= iter; i++) {
 			trainModel(corpus);
-			// TODO make this two methods, one which takes samples and one which doesn't
-//			if (iter % samples == 0) {
-//				this.samples.putAll(segments.getCurrentObservations().toMap());
-//			}
 		}
 	}
 
-	public void trainModel(List<String[]> corpus) {
+	/**
+	 * Train the model and take samples in the process
+	 * 
+	 * @param corpus
+	 *            The corpus to segment
+	 * @param iter
+	 *            The number of iterations for the Gibbs Sampler
+	 * @param samples
+	 *            The number of samples to be taken
+	 */
+	public void train(List<A[]> corpus, int iter, int samples) {
+		for (int i = 1; i <= iter; i++) {
+			trainModel(corpus);
+			if (iter % samples == 0) {
+				this.samples.putAll(segments.getCurrentObservations().toMap());
+			}
+		}
+	}
+
+	/**
+	 * Run one sampling iteration on the corpus
+	 * 
+	 * @param corpus
+	 *            The corpus to segment
+	 */
+	public void trainModel(List<A[]> corpus) {
 		int sentNum = 0;
-		for (String[] sent : corpus) {
+		for (A[] sent : corpus) {
 			boundaries.set(sentNum, sampleBoundaries(sent, boundaries.get(sentNum)));
 			sentNum++;
 		}
@@ -105,26 +134,26 @@ public class Segmenter {
 	 * @param boundaries
 	 *            The existing boundaries for that sentence
 	 */
-	protected int[] sampleBoundaries(String[] sent, int[] boundaries) {
+	protected int[] sampleBoundaries(A[] sent, int[] boundaries) {
 
 		// do nothing if the segement has length 1
 		if (sent.length == 1) {
 			return boundaries;
 		}
-		
+
 		int[] newBoundaries = new int[sent.length];
 		int prevBoundary = 0;
 		int nextBoundary = boundaries[0];
 		int boundaryNum = 0;
 		int newBoundaryNum = 0;
-		String currentSegment = String.join(delimiter, Arrays.copyOfRange(sent, 0, nextBoundary));
+		Segment<A> currentSegment = new Segment<A>(Arrays.copyOfRange(sent, 0, nextBoundary));
 		double currentSegmentProb = segments.probability(currentSegment);
 
 		for (int i = 1; i < sent.length; i++) {
-			//System.out.printf("prevBoundary = %d, nextBoundary = %d, i = %d%n", prevBoundary, nextBoundary, i);
+			// System.out.printf("prevBoundary = %d, nextBoundary = %d, i = %d%n", prevBoundary, nextBoundary, i);
 			if (i != nextBoundary) {
-				String firstSegment = String.join(delimiter, Arrays.copyOfRange(sent, prevBoundary, i));
-				String secondSegment = String.join(delimiter, Arrays.copyOfRange(sent, i, nextBoundary));
+				Segment<A> firstSegment = new Segment<A>(Arrays.copyOfRange(sent, prevBoundary, i));
+				Segment<A> secondSegment = new Segment<A>(Arrays.copyOfRange(sent, i, nextBoundary));
 				double splitProb = segments.probability(firstSegment) + segments.probability(secondSegment);
 				if (splitProb >= randomGenerator.nextDouble() * (splitProb + currentSegmentProb)) {
 					newBoundaries[newBoundaryNum] = i;
@@ -140,9 +169,9 @@ public class Segmenter {
 				boundaryNum++;
 				nextBoundary = boundaries[boundaryNum];
 				// TODO check whether the variable assignments work out here
-				String firstSegment = currentSegment;
-				String secondSegment = String.join(delimiter, Arrays.copyOfRange(sent, i, nextBoundary));
-				String expandedSegment = firstSegment + delimiter + secondSegment;
+				Segment<A> firstSegment = currentSegment;
+				Segment<A> secondSegment = new Segment<A>(Arrays.copyOfRange(sent, i, nextBoundary));
+				Segment<A> expandedSegment = firstSegment.compose(secondSegment);
 				// in this case, currentSegmentProb == firstSegmentProb
 				double splitProb = currentSegmentProb + segments.probability(secondSegment);
 				double expandProb = segments.probability(expandedSegment);
@@ -163,26 +192,38 @@ public class Segmenter {
 		return newBoundaries;
 	}
 
-	public void writeSegmentation(List<String[]> corpus, String pathToFile) throws IOException {
-		
+	/**
+	 * Write the segmentation resulting from the current state to disk
+	 * 
+	 * @param corpus
+	 *            The corpus to segment
+	 * @param pathToFile
+	 *            The path to which the output shall be written
+	 * @throws IOException
+	 *             if the output path is not accessible
+	 */
+	public void writeSegmentation(List<A[]> corpus, String pathToFile) throws IOException {
+
 		try (BufferedWriter writer = new BufferedWriter(new FileWriter(pathToFile))) {
 			int sentNum = 0;
-			for (String[] sent : corpus) {
+			for (A[] sent : corpus) {
 				String output = "";
-				int wordPos = 0;
+				int prevBoundary = 0;
+
 				for (int boundary : this.boundaries.get(sentNum)) {
-					if (boundary == 0) break;
+					if (boundary == 0)
+						break;
 					else {
-						while (wordPos < boundary) {
-							output += sent[wordPos];
-							wordPos++;
+						while (prevBoundary < boundary) {
+							output += sent[prevBoundary];
+							prevBoundary++;
 						}
-						output += Segmenter.delimiter;
+						output += this.delimiter;
 					}
 				}
 				writer.write(output);
 				writer.newLine();
-				
+
 				sentNum++;
 			}
 		}
