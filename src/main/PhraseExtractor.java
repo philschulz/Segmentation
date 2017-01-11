@@ -1,11 +1,13 @@
 package main;
 
 import java.io.BufferedReader;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import com.martiansoftware.jsap.FlaggedOption;
 import com.martiansoftware.jsap.JSAP;
@@ -13,6 +15,7 @@ import com.martiansoftware.jsap.JSAPException;
 import com.martiansoftware.jsap.JSAPResult;
 import com.martiansoftware.jsap.UnflaggedOption;
 
+import collections.Counter;
 import io.TextReader;
 import mainUtils.InputChecker;
 import models.Segmenter;
@@ -32,6 +35,10 @@ public class PhraseExtractor {
 					+ "strings, the systems segments sentences into phrases, if the atoms are chars it segments into words.");
 			commandLineParser.registerParameter(atoms);
 
+			FlaggedOption concentration = new FlaggedOption("concentration").setStringParser(JSAP.DOUBLE_PARSER).setDefault("1").setLongFlag("concentration").setShortFlag('c');
+			concentration.setHelp("Set the initial concentration parameter for the DP.");
+			commandLineParser.registerParameter(concentration);
+			
 			UnflaggedOption inputFile = new UnflaggedOption("inputFile").setStringParser(JSAP.STRING_PARSER).setRequired(true)
 					.setGreedy(true);
 			inputFile.setHelp("The input file from which to extract the phrases.");
@@ -46,6 +53,7 @@ public class PhraseExtractor {
 
 		String inputFile = commandLine.getString("inputFile");
 		String atoms = commandLine.getString("atoms").toLowerCase();
+		double concentration = commandLine.getDouble("concentration");
 
 		List<String[]> corpus = new ArrayList<String[]>();
 		if (atoms.equals("string")) {
@@ -73,7 +81,7 @@ public class PhraseExtractor {
 			}
 		}
 
-		Segmenter<String> segmenter = new Segmenter<String>(1);
+		Segmenter<String> segmenter = new Segmenter<String>(concentration);
 		try {
 			segmenter.segment(corpus, 100);
 		} catch (IOException e) {
@@ -82,6 +90,63 @@ public class PhraseExtractor {
 			System.exit(-1);
 		}
 		System.out.println("Finished");
+	}
+
+	/**
+	 * Evaluate the model output using F1-score where precision and recall are computed on the segment level
+	 * 
+	 * @param pathToGoldFile
+	 *            The file containing the gold segments
+	 * @param pathToOutputFile
+	 *            The file containing the predicted segments
+	 * @return A string containing precision, recall and F1
+	 * @throws FileNotFoundException
+	 *             If one of the input files does not exist
+	 * @throws IOException
+	 *             If something goes wrong while reading the files
+	 */
+	public static String eval(String pathToGoldFile, String pathToOutputFile) throws FileNotFoundException, IOException {
+		Counter<String> goldItems = new Counter<String>();
+		Counter<String> predictedItems = new Counter<String>();
+		double truePositives = 0;
+		double falsePositives = 0;
+		double falseNegatives = 0;
+
+		try (TextReader reader = new TextReader(pathToGoldFile)) {
+			String[] line;
+			while ((line = reader.nextLine()) != null) {
+				goldItems.putAll(line, 1.0);
+			}
+		}
+
+		try (TextReader reader = new TextReader(pathToOutputFile)) {
+			String[] line;
+			while ((line = reader.nextLine()) != null) {
+				predictedItems.putAll(line, 1.0);
+			}
+		}
+
+		// TODO do this sentence by sentence!
+		for (Map.Entry<String, Double> entry : predictedItems.entrySet()) {
+			double goldCount = goldItems.get(entry.getKey());
+			double predictedCount = entry.getValue();
+
+			if (predictedCount > goldCount) {
+				truePositives += goldCount;
+				falsePositives += predictedCount - goldCount;
+			} else if (goldCount > predictedCount) {
+				truePositives += predictedCount;
+				falseNegatives += goldCount - predictedCount;
+			} else {
+				truePositives += predictedCount;
+			}
+		}
+
+		double precision = truePositives / (truePositives + falsePositives);
+		double recall = truePositives / (truePositives + falseNegatives);
+		double f1 = 2 * precision * recall / (precision + recall);
+
+		return String.format("Precision =%f, Recall = %f, F1 = %f", precision, recall, f1);
 	}
 
 }

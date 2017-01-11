@@ -13,13 +13,13 @@ import org.apache.commons.math3.random.MersenneTwister;
 
 import collections.Counter;
 import stochasticProcesses.DP;
+import stochasticProcesses.PredictiveDirichletDistribution;
 import utilities.Segment;
 
 public class Segmenter<A> {
 
 	private DP<Segment<A>> segments;
 	private List<int[]> boundaries;
-	private Counter<A> atoms;
 	private MersenneTwister randomGenerator;
 	private Counter<Segment<A>> samples;
 
@@ -29,7 +29,6 @@ public class Segmenter<A> {
 		segments = new DP<Segment<A>>(concentration);
 		// use linked list for frequent insertions
 		boundaries = new LinkedList<int[]>();
-		atoms = new Counter<A>();
 		randomGenerator = new MersenneTwister();
 		samples = new Counter<Segment<A>>();
 		this.delimiter = delimiter;
@@ -65,18 +64,19 @@ public class Segmenter<A> {
 	 */
 	public void initialiseState(List<A[]> corpus) {
 		HashSet<A> unique = new HashSet<A>();
-		segments.setSizeOfBaseSupport(0);
 
-		for (A[] sent : corpus) {
-			segments.addObservation(new Segment<A>(sent));
-			boundaries.add(new int[] { sent.length });
-			atoms.putAll(sent, 1.0);
+		corpus.forEach(sent -> {
 			for (A atom : sent) {
 				unique.add(atom);
 			}
-		}
+		});
 
-		segments.setSizeOfBaseSupport(unique.size());
+		this.segments.setBaseDistribution(new PredictiveDirichletDistribution<Segment<A>>(1, unique.size()));
+
+		corpus.forEach(sent -> {
+			segments.addObservation(new Segment<A>(sent));
+			boundaries.add(new int[] { sent.length });
+		});
 	}
 
 	/**
@@ -173,16 +173,19 @@ public class Segmenter<A> {
 				Segment<A> secondSegment = new Segment<A>(Arrays.copyOfRange(sent, i, nextBoundary));
 				Segment<A> expandedSegment = firstSegment.compose(secondSegment);
 				// in this case, currentSegmentProb == firstSegmentProb
-				double splitProb = currentSegmentProb + segments.probability(secondSegment);
+				double secondSegmentProb = segments.probability(secondSegment);
+				double splitProb = currentSegmentProb + secondSegmentProb;
 				double expandProb = segments.probability(expandedSegment);
 				if (expandProb >= randomGenerator.nextDouble() * (splitProb + expandProb)) {
 					segments.removeObservation(firstSegment);
 					segments.removeObservation(secondSegment);
 					segments.addObservation(expandedSegment);
 					currentSegment = expandedSegment;
+					currentSegmentProb = expandProb;
 				} else {
 					prevBoundary = i;
 					newBoundaries[newBoundaryNum] = i;
+					currentSegment = secondSegment;
 					newBoundaryNum++;
 				}
 			}
