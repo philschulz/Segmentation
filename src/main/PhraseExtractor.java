@@ -33,7 +33,7 @@ public class PhraseExtractor {
 
 		String inputFile = commandLine.getString("inputFile");
 		
-		Segmenter segmenter = new Segmenter(1);
+		Segmenter segmenter = new Segmenter(0.001);
 		
 		try {
 			segmenter.segment(inputFile, 100);

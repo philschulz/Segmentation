@@ -65,7 +65,7 @@ public class Segmenter {
 	 */
 	public void initialiseState(List<String[]> corpus) {
 		HashSet<String> unique = new HashSet<String>();
-		segments.setSizeOfSupport(0);
+		segments.setSizeOfBaseSupport(0);
 		
 		for (String[] sent : corpus) {
 			segments.addObservation(String.join(delimiter, sent));
@@ -76,7 +76,7 @@ public class Segmenter {
 			}
 		}
 		
-		segments.setSizeOfSupport(unique.size());
+		segments.setSizeOfBaseSupport(unique.size());
 	}
 
 	public void train(List<String[]> corpus, int iter, int samples) {
@@ -115,7 +115,7 @@ public class Segmenter {
 		int[] newBoundaries = new int[sent.length];
 		int prevBoundary = 0;
 		int nextBoundary = boundaries[0];
-		int boundaryNum = 0;
+		int boundaryNum = 1;
 		int newBoundaryNum = 0;
 		String currentSegment = String.join(delimiter, Arrays.copyOfRange(sent, 0, nextBoundary));
 		double currentSegmentProb = segments.probability(currentSegment);
@@ -137,23 +137,28 @@ public class Segmenter {
 					prevBoundary = i;
 				}
 			} else {
-				boundaryNum++;
 				nextBoundary = boundaries[boundaryNum];
+				boundaryNum++;
 				// TODO check whether the variable assignments work out here
 				String firstSegment = currentSegment;
 				String secondSegment = String.join(delimiter, Arrays.copyOfRange(sent, i, nextBoundary));
 				String expandedSegment = firstSegment + delimiter + secondSegment;
+				// TODO System.out.printf("First segment = %s, Second segment = %s, index = %d, boundary = %d, sent = %s%n", firstSegment, secondSegment, i, nextBoundary, Arrays.toString(sent));
 				// in this case, currentSegmentProb == firstSegmentProb
-				double splitProb = currentSegmentProb + segments.probability(secondSegment);
+				double secondSegmentProb = segments.probability(secondSegment);
+				double splitProb = currentSegmentProb + secondSegmentProb;
 				double expandProb = segments.probability(expandedSegment);
 				if (expandProb >= randomGenerator.nextDouble() * (splitProb + expandProb)) {
 					segments.removeObservation(firstSegment);
 					segments.removeObservation(secondSegment);
 					segments.addObservation(expandedSegment);
 					currentSegment = expandedSegment;
+					currentSegmentProb = expandProb;
 				} else {
 					prevBoundary = i;
 					newBoundaries[newBoundaryNum] = i;
+					currentSegment = secondSegment;
+					currentSegmentProb = secondSegmentProb;
 					newBoundaryNum++;
 				}
 			}
