@@ -10,10 +10,12 @@ import java.util.LinkedList;
 import java.util.List;
 
 import org.apache.commons.math3.random.MersenneTwister;
+import org.apache.commons.math3.util.Pair;
 
 import collections.Counter;
+import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
 import stochasticProcesses.DP;
-import stochasticProcesses.PredictiveDirichletDistribution;
+import stochasticProcesses.DiscreteBaseDistribution;
 import utilities.Segment;
 
 public class Segmenter<A> {
@@ -38,18 +40,80 @@ public class Segmenter<A> {
 		this(concentration, " ");
 	}
 
-	public void segment(List<A[]> corpus, int iter) throws FileNotFoundException, IOException {
-		/**
-		 * Segment an input file.
-		 * 
-		 * @param pathToFile
-		 *            The path to the input file
-		 */
+	private class LocalBase implements DiscreteBaseDistribution<Segment<A>> {
 
+		double concentration;
+		double concentrationTotal;
+		double total;
+		int sizeOfSupport;
+		Counter<A> observations;
+		Object2DoubleOpenHashMap<Pair<Double, Double>> cache;
+		
+		LocalBase(double concentration, int sizeOfSupport) {
+			this.concentration = concentration;
+			this.concentrationTotal = concentration*sizeOfSupport;
+			this.total = concentrationTotal;
+			this.sizeOfSupport = sizeOfSupport;
+			this.observations = new Counter<A>();
+			this.cache = new Object2DoubleOpenHashMap<Pair<Double, Double>>();
+		}
+
+		@Override
+		public double probability(Segment<A> event) {
+			double result = 1;
+			for (A atom : event) {
+				double score = this.observations.get(atom);
+				// add prior statistics to 0 counts
+				score = score == 0 ? this.concentration : score;
+				Pair<Double, Double> pair = new Pair<Double, Double>(score, total);
+				Double prob;
+				if ((prob = cache.get(pair)) == null) {
+					prob = score / total;
+					cache.put(pair, prob);
+				}
+				result *= prob;
+			}
+			return result;
+		}
+
+		@Override
+		public double logProb(Segment<A> event) {
+			return Math.log(probability(event));
+		}
+
+		@Override
+		public void update(Segment<A> event, double count) {
+			for (A atom : event) {
+				this.total += count;
+				// ensure that prior statistics are added
+				if (!this.observations.containsKey(atom)) {
+					count += this.concentration;
+				}
+				this.observations.put(atom, count);
+			}
+		}
+
+		@Override
+		public void setSizeOfSupport(int sizeOfSupport) {
+			int difference = sizeOfSupport - this.sizeOfSupport;
+			this.total += difference;
+			this.sizeOfSupport = sizeOfSupport;
+		}
+	}
+
+	/**
+	 * Segment a corpus of discrete data
+	 * @param corpus The corpus stored in memory
+	 * @param iter The number of iterations used by the sampler
+	 * @param outFile The file to which the output should be written
+	 * @throws FileNotFoundException If the input file does not exist
+	 * @throws IOException If something goes wrong during reading or writing from/to disk
+	 */
+	public void segment(List<A[]> corpus, int iter, String outFile) throws FileNotFoundException, IOException {
 		initialiseState(corpus);
 		// TODO change number of samples later
 		train(corpus, iter);
-		writeSegmentation(corpus, "out.txt");
+		writeSegmentation(corpus, outFile);
 	}
 
 	public void setDelimiter(String delimiter) {
@@ -71,7 +135,7 @@ public class Segmenter<A> {
 			}
 		});
 
-		this.segments.setBaseDistribution(new PredictiveDirichletDistribution<Segment<A>>(1, unique.size()));
+		this.segments.setBaseDistribution(new LocalBase(1, unique.size()));
 
 		corpus.forEach(sent -> {
 			segments.addObservation(new Segment<A>(sent));
